@@ -1,0 +1,15 @@
+streamlit>=1.35.0
+tensorflow>=2.15.0
+tensorflow-hub>=0.16.0
+torch>=2.2.0
+torchaudio>=2.2.0
+transformers>=4.40.0
+sentence-transformers>=3.0.0
+openai-whisper>=20231117
+librosa>=0.10.2
+soundfile>=0.12.1
+scipy>=1.13.0
+numpy>=1.26.0
+plotly>=5.22.0
+requests>=2.31.0
+huggingface_hub>=0.23.0
