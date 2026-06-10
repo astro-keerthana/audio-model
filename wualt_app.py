@@ -211,7 +211,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ── Configuration (identical to notebook Cell 4) ──────────────
+# ── Configuration ─────────────────────────────────────────────
 MIC = {
     "sensitivity_dbfs": -36.0,
     "aop_db": 128.0,
@@ -296,43 +296,51 @@ DANGER_PHRASES = [
     "என் உயிர் போகிறது",
 ]
 
-# ── Model loading (cached) ─────────────────────────────────────
+# ── Model loading (cached — no spinners inside) ───────────────
 @st.cache_resource(show_spinner=False)
 def load_all_models():
     models = {}
-    with st.spinner("Loading Whisper medium…"):
-        models["whisper"] = whisper.load_model("medium")
-    with st.spinner("Loading XLM-RoBERTa XNLI…"):
-        models["xnli"] = pipeline(
-            "zero-shot-classification",
-            model="joeddav/xlm-roberta-large-xnli",
-            tokenizer="joeddav/xlm-roberta-large-xnli",
-            device=0 if torch.cuda.is_available() else -1,
-        )
-    with st.spinner("Loading Multilingual MPNet…"):
-        mpnet = SentenceTransformer("sentence-transformers/paraphrase-multilingual-mpnet-base-v2")
-        models["mpnet"] = mpnet
-        models["danger_embeddings"] = mpnet.encode(
-            DANGER_PHRASES, convert_to_tensor=True, show_progress_bar=False
-        )
-    with st.spinner("Loading SER model…"):
-        models["ser_extractor"] = Wav2Vec2FeatureExtractor.from_pretrained("superb/wav2vec2-base-superb-er")
-        models["ser_model"] = AutoModelForAudioClassification.from_pretrained("superb/wav2vec2-base-superb-er")
-        models["ser_model"].eval()
-    with st.spinner("Loading AST…"):
-        models["ast_extractor"] = AutoFeatureExtractor.from_pretrained("MIT/ast-finetuned-audioset-10-10-0.4593")
-        models["ast_model"] = ASTForAudioClassification.from_pretrained("MIT/ast-finetuned-audioset-10-10-0.4593")
-        models["ast_model"].eval()
-    with st.spinner("Loading YAMNet…"):
-        models["yamnet"] = hub.load("https://tfhub.dev/google/yamnet/1")
-        r = requests.get(
-            "https://raw.githubusercontent.com/tensorflow/models/master/"
-            "research/audioset/yamnet/yamnet_class_map.csv"
-        )
-        models["yamnet_classes"] = [row[2] for row in csv.reader(io.StringIO(r.text))][1:]
+
+    # Whisper
+    models["whisper"] = whisper.load_model("medium")
+
+    # XLM-RoBERTa XNLI
+    models["xnli"] = pipeline(
+        "zero-shot-classification",
+        model="joeddav/xlm-roberta-large-xnli",
+        tokenizer="joeddav/xlm-roberta-large-xnli",
+        device=0 if torch.cuda.is_available() else -1,
+    )
+
+    # Multilingual MPNet
+    mpnet = SentenceTransformer("sentence-transformers/paraphrase-multilingual-mpnet-base-v2")
+    models["mpnet"] = mpnet
+    models["danger_embeddings"] = mpnet.encode(
+        DANGER_PHRASES, convert_to_tensor=True, show_progress_bar=False
+    )
+
+    # SER
+    models["ser_extractor"] = Wav2Vec2FeatureExtractor.from_pretrained("superb/wav2vec2-base-superb-er")
+    models["ser_model"]     = AutoModelForAudioClassification.from_pretrained("superb/wav2vec2-base-superb-er")
+    models["ser_model"].eval()
+
+    # AST
+    models["ast_extractor"] = AutoFeatureExtractor.from_pretrained("MIT/ast-finetuned-audioset-10-10-0.4593")
+    models["ast_model"]     = ASTForAudioClassification.from_pretrained("MIT/ast-finetuned-audioset-10-10-0.4593")
+    models["ast_model"].eval()
+
+    # YAMNet
+    models["yamnet"] = hub.load("https://tfhub.dev/google/yamnet/1")
+    r = requests.get(
+        "https://raw.githubusercontent.com/tensorflow/models/master/"
+        "research/audioset/yamnet/yamnet_class_map.csv"
+    )
+    models["yamnet_classes"] = [row[2] for row in csv.reader(io.StringIO(r.text))][1:]
+
     return models
 
-# ── Audio functions (identical logic to notebook) ─────────────
+
+# ── Audio utilities ───────────────────────────────────────────
 def load_audio(path, sr=16000):
     audio, sr = librosa.load(path, sr=sr, mono=True)
     audio = audio / (np.max(np.abs(audio)) + 1e-9)
@@ -347,7 +355,7 @@ def get_db_level(path):
         audio = audio - np.mean(audio)
         rms = np.sqrt(np.mean(audio ** 2))
         if rms < 1e-10: return None
-        dbfs = 20 * np.log10(rms)
+        dbfs   = 20 * np.log10(rms)
         db_spl = dbfs - MIC["sensitivity_dbfs"] + 94.0
         return round(float(np.clip(db_spl, MIC["noise_floor_db"], MIC["aop_db"])), 1)
     except Exception as e:
@@ -367,22 +375,26 @@ def get_noise_score(path):
     try:
         db = get_db_level(path)
         if db is None: return 0.0
-        return round(min(1.0, max(0.0, (db - MIC["noise_floor_db"]) / (MIC["aop_db"] - MIC["noise_floor_db"]))), 4)
+        return round(min(1.0, max(0.0,
+            (db - MIC["noise_floor_db"]) / (MIC["aop_db"] - MIC["noise_floor_db"])
+        )), 4)
     except: return 0.0
 
 def get_noise_status(path):
     db = get_db_level(path)
     if db is None: return "No Signal"
-    if db < 70: return "Safe"
+    if db < 70:   return "Safe"
     elif db < 85: return "Moderate"
-    else: return "Dangerous"
+    else:         return "Dangerous"
 
+
+# ── Fusion ────────────────────────────────────────────────────
 def _run_fusion(path, models):
     try:
         audio, _ = load_audio(path)
-        audio_tf = tf.constant(audio.astype(np.float32))
+        audio_tf  = tf.constant(audio.astype(np.float32))
         scores, _, _ = models["yamnet"](audio_tf)
-        mean_scores = tf.reduce_mean(scores, axis=0).numpy()
+        mean_scores   = tf.reduce_mean(scores, axis=0).numpy()
 
         yamnet_hits, yamnet_sum = {}, 0.0
         for cls in ALL_DANGER:
@@ -394,7 +406,7 @@ def _run_fusion(path, models):
         inputs = models["ast_extractor"](audio, sampling_rate=16000, return_tensors="pt")
         with torch.no_grad():
             logits = models["ast_model"](**inputs).logits
-        probs = torch.softmax(logits, dim=-1)[0]
+        probs    = torch.softmax(logits, dim=-1)[0]
         id2label = models["ast_model"].config.id2label
 
         ast_hits, ast_sum = {}, 0.0
@@ -418,12 +430,14 @@ def _run_fusion(path, models):
 def _physio_override_triggered(fused, physio_score):
     if physio_score <= PHYSIO_OVERRIDE_THRESHOLD: return False
     physio_scores = {c: fused.get(c, 0.0) for c in DANGER_PHYSIO}
-    top_physio = max(physio_scores, key=physio_scores.get)
+    top_physio    = max(physio_scores, key=physio_scores.get)
     return top_physio not in AMBIENT_PHYSIO
 
+
+# ── Vocal metrics ─────────────────────────────────────────────
 def _get_voiced_f0(audio, sr):
     frame_len = int(PITCH_CFG["window_size"] * sr)
-    hop_len = int(PITCH_CFG["hop_size"] * sr)
+    hop_len   = int(PITCH_CFG["hop_size"] * sr)
     try:
         f0, voiced_flag, voiced_prob = librosa.pyin(
             audio, fmin=PITCH_CFG["min_f0"], fmax=PITCH_CFG["max_f0"],
@@ -431,26 +445,28 @@ def _get_voiced_f0(audio, sr):
         )
         voiced_f0 = f0[voiced_flag & ~np.isnan(f0) & (voiced_prob > PITCH_CFG["voiced_thr"])]
         if len(voiced_f0) < 3:
-            f0_yin = librosa.yin(audio, fmin=PITCH_CFG["min_f0"], fmax=PITCH_CFG["max_f0"],
-                                 sr=sr, frame_length=frame_len, hop_length=hop_len)
+            f0_yin = librosa.yin(
+                audio, fmin=PITCH_CFG["min_f0"], fmax=PITCH_CFG["max_f0"],
+                sr=sr, frame_length=frame_len, hop_length=hop_len
+            )
             voiced_f0 = f0_yin[(f0_yin >= PITCH_CFG["min_f0"]) & (f0_yin <= PITCH_CFG["max_f0"])]
         return voiced_f0
     except: return np.array([])
 
 def _build_f0_per_sample(audio, sr):
     frame_len = int(PITCH_CFG["window_size"] * sr)
-    hop_len = int(PITCH_CFG["hop_size"] * sr)
+    hop_len   = int(PITCH_CFG["hop_size"] * sr)
     try:
         f0, voiced_flag, voiced_prob = librosa.pyin(
             audio, fmin=PITCH_CFG["min_f0"], fmax=PITCH_CFG["max_f0"],
             sr=sr, frame_length=frame_len, hop_length=hop_len, fill_na=np.nan
         )
     except: return np.full(len(audio), np.nan)
-    n_frames = len(f0)
+    n_frames  = len(f0)
     n_samples = len(audio)
     frame_centres = np.arange(n_frames) * hop_len + hop_len // 2
-    voiced_mask = voiced_flag & ~np.isnan(f0) & (voiced_prob > PITCH_CFG["voiced_thr"])
-    voiced_idx = np.where(voiced_mask)[0]
+    voiced_mask   = voiced_flag & ~np.isnan(f0) & (voiced_prob > PITCH_CFG["voiced_thr"])
+    voiced_idx    = np.where(voiced_mask)[0]
     if len(voiced_idx) < 2: return np.full(n_samples, np.nan)
     f0_per_sample = np.full(n_samples, np.nan)
     for i in range(len(voiced_idx) - 1):
@@ -467,21 +483,21 @@ def _build_f0_per_sample(audio, sr):
 def _get_glottal_cycles(audio, sr):
     try:
         f0_per_sample = _build_f0_per_sample(audio, sr)
-        n_samples = len(audio)
+        n_samples     = len(audio)
         periods, amplitudes = [], []
         cursor = 0
         while cursor < n_samples:
             f0_val = f0_per_sample[cursor]
             if np.isnan(f0_val):
                 remaining = f0_per_sample[cursor:]
-                next_v = np.argwhere(~np.isnan(remaining))
+                next_v    = np.argwhere(~np.isnan(remaining))
                 if len(next_v) == 0: break
                 cursor += int(next_v[0][0]); continue
             period_samples = int(round(sr / f0_val))
             if period_samples < 2: cursor += 1; continue
             end = cursor + period_samples
             if end > n_samples: break
-            cycle = audio[cursor:end]
+            cycle    = audio[cursor:end]
             peak_amp = float(np.max(np.abs(cycle)))
             if peak_amp < 0.001: cursor += period_samples; continue
             periods.append(1.0 / f0_val)
@@ -492,56 +508,60 @@ def _get_glottal_cycles(audio, sr):
 
 def get_vocal_metrics(path):
     audio, sr = load_audio_raw(path)
-    voiced = _get_voiced_f0(audio, sr)
+    voiced    = _get_voiced_f0(audio, sr)
     periods, amplitudes = _get_glottal_cycles(audio, sr)
 
-    pitch_hz = round(float(np.mean(voiced)), 1) if len(voiced) > 0 else 0.0
-    pitch_sd = round(float(np.std(voiced)), 1) if len(voiced) > 1 else 0.0
-    pitch_min = round(float(np.min(voiced)), 1) if len(voiced) > 0 else 0.0
-    pitch_max = round(float(np.max(voiced)), 1) if len(voiced) > 0 else 0.0
+    pitch_hz  = round(float(np.mean(voiced)), 1)  if len(voiced) > 0 else 0.0
+    pitch_sd  = round(float(np.std(voiced)),  1)  if len(voiced) > 1 else 0.0
+    pitch_min = round(float(np.min(voiced)),  1)  if len(voiced) > 0 else 0.0
+    pitch_max = round(float(np.max(voiced)),  1)  if len(voiced) > 0 else 0.0
 
     jitter = 0.0
     if len(periods) >= 3:
         p = periods[(periods >= 0.0001) & (periods <= 0.02)]
         if len(p) >= 3:
-            ratios = p[1:] / (p[:-1] + 1e-10)
-            valid = (ratios < 1.3) & (ratios > 1 / 1.3)
+            ratios  = p[1:] / (p[:-1] + 1e-10)
+            valid   = (ratios < 1.3) & (ratios > 1 / 1.3)
             p_clean = p[:-1][valid]
             if len(p_clean) >= 2:
-                jitter = round(float((np.mean(np.abs(np.diff(p_clean))) / (np.mean(p_clean) + 1e-10)) * 100), 3)
+                jitter = round(float(
+                    (np.mean(np.abs(np.diff(p_clean))) / (np.mean(p_clean) + 1e-10)) * 100
+                ), 3)
 
     shimmer = 0.0
     if len(amplitudes) >= 3:
         valid_mask = (periods >= 0.0001) & (periods <= 0.02)
         a = amplitudes[valid_mask]
         if len(a) >= 3:
-            ar = a[1:] / (a[:-1] + 1e-10)
-            valid = (ar < 1.6) & (ar > 1 / 1.6)
+            ar      = a[1:] / (a[:-1] + 1e-10)
+            valid   = (ar < 1.6) & (ar > 1 / 1.6)
             a_clean = a[:-1][valid]
             if len(a_clean) >= 2:
-                shimmer = round(float((np.mean(np.abs(np.diff(a_clean))) / (np.mean(a_clean) + 1e-10)) * 100), 3)
+                shimmer = round(float(
+                    (np.mean(np.abs(np.diff(a_clean))) / (np.mean(a_clean) + 1e-10)) * 100
+                ), 3)
 
     hnr = 0.0
     try:
         frame_len = int(0.04 * sr)
-        hop_len = int(0.01 * sr)
-        min_lag = int(sr / PITCH_CFG["max_f0"])
-        max_lag = int(sr / PITCH_CFG["min_f0"])
-        window = np.hanning(frame_len)
-        hnr_vals = []
+        hop_len   = int(0.01 * sr)
+        min_lag   = int(sr / PITCH_CFG["max_f0"])
+        max_lag   = int(sr / PITCH_CFG["min_f0"])
+        window    = np.hanning(frame_len)
+        hnr_vals  = []
         for start in range(0, len(audio) - frame_len, hop_len):
             frame = audio[start:start + frame_len].copy()
             if np.max(np.abs(frame)) < 0.001: continue
             frame *= window
             frame -= np.mean(frame)
-            acf = np.correlate(frame, frame, mode='full')
-            acf = acf[len(acf) // 2:]
+            acf      = np.correlate(frame, frame, mode='full')
+            acf      = acf[len(acf) // 2:]
             if acf[0] < 1e-10: continue
             acf_norm = acf / acf[0]
             if max_lag >= len(acf_norm): continue
             seg = acf_norm[min_lag:max_lag]
             if len(seg) == 0: continue
-            r = np.clip(float(np.max(seg)), 1e-9, 1.0 - 1e-9)
+            r   = np.clip(float(np.max(seg)), 1e-9, 1.0 - 1e-9)
             hnr_vals.append(10.0 * np.log10(r / (1.0 - r)))
         hnr = round(float(np.mean(hnr_vals)), 2) if hnr_vals else 0.0
     except: pass
@@ -549,31 +569,33 @@ def get_vocal_metrics(path):
     intensity = 0.0
     try:
         frame_len = int(0.01 * sr)
-        rms_vals = []
+        rms_vals  = []
         for start in range(0, len(audio) - frame_len, frame_len):
             frame = audio[start:start + frame_len]
-            rms = np.sqrt(np.mean(frame ** 2))
+            rms   = np.sqrt(np.mean(frame ** 2))
             if rms > 1e-10: rms_vals.append(rms)
         if rms_vals:
-            mean_rms = np.sqrt(np.mean(np.array(rms_vals) ** 2))
+            mean_rms  = np.sqrt(np.mean(np.array(rms_vals) ** 2))
             intensity = round(float(20.0 * np.log10(mean_rms + 1e-10) + 94.0), 2)
     except: pass
 
     speaking_rate = 0.0
     try:
         audio_n, sr_n = load_audio(path)
-        hop = 512
-        energy = np.array([np.sum(np.abs(audio_n[i:i + hop]) ** 2)
-                           for i in range(0, len(audio_n) - hop, hop)])
+        hop    = 512
+        energy = np.array([
+            np.sum(np.abs(audio_n[i:i + hop]) ** 2)
+            for i in range(0, len(audio_n) - hop, hop)
+        ])
         peaks, _ = find_peaks(energy, height=np.mean(energy) * 0.5, distance=4)
-        duration = len(audio_n) / sr_n
+        duration  = len(audio_n) / sr_n
         speaking_rate = round(len(peaks) / duration if duration > 0 else 0.0, 2)
     except: pass
 
     flags = []
-    if jitter > CLINICAL["jitter_normal_max"] * 100: flags.append("High Jitter")
+    if jitter  > CLINICAL["jitter_normal_max"]  * 100: flags.append("High Jitter")
     if shimmer > CLINICAL["shimmer_normal_max"] * 100: flags.append("High Shimmer")
-    if hnr < CLINICAL["hnr_normal_min"]: flags.append("Low HNR")
+    if hnr     < CLINICAL["hnr_normal_min"]:           flags.append("Low HNR")
     vocal_health = "Normal" if not flags else " | ".join(flags)
 
     return {
@@ -584,15 +606,19 @@ def get_vocal_metrics(path):
         "vocal_health": vocal_health,
     }
 
+
+# ── Emotion ───────────────────────────────────────────────────
 def get_emotion(path, models):
     try:
         audio, _ = load_audio(path)
-        inputs = models["ser_extractor"](audio, sampling_rate=16000, return_tensors="pt", padding=True)
+        inputs   = models["ser_extractor"](
+            audio, sampling_rate=16000, return_tensors="pt", padding=True
+        )
         with torch.no_grad():
             logits = models["ser_model"](**inputs).logits
-        probs = torch.softmax(logits, dim=-1)[0]
+        probs    = torch.softmax(logits, dim=-1)[0]
         id2label = models["ser_model"].config.id2label
-        top_idx = torch.argmax(probs).item()
+        top_idx  = torch.argmax(probs).item()
         def normalize(l): return SUPERB_EMOTION_MAP.get(l.lower().strip(), l.lower().strip())
         all_emotions = {
             normalize(id2label.get(i, str(i))): round(float(probs[i]), 4)
@@ -601,20 +627,22 @@ def get_emotion(path, models):
         all_emotions = dict(sorted(all_emotions.items(), key=lambda x: x[1], reverse=True))
         return {
             "top_emotion": normalize(id2label.get(top_idx, str(top_idx))),
-            "confidence": round(float(probs[top_idx]), 4),
+            "confidence":  round(float(probs[top_idx]), 4),
             "all_emotions": all_emotions,
         }
     except Exception as e:
         log.warning(f"get_emotion: {e}")
         return {"top_emotion": "unknown", "confidence": 0.0, "all_emotions": {}}
 
+
+# ── Linguistic ────────────────────────────────────────────────
 def get_linguistic(path, models):
     try:
-        result = models["whisper"].transcribe(
+        result   = models["whisper"].transcribe(
             path, task="transcribe",
             fp16=torch.cuda.is_available(), verbose=False
         )
-        text = result.get("text", "").strip()
+        text     = result.get("text", "").strip()
         language = result.get("language", "unknown")
     except Exception as e:
         log.warning(f"whisper: {e}")
@@ -625,9 +653,16 @@ def get_linguistic(path, models):
         try:
             res = models["xnli"](text, candidate_labels=XNLI_LABELS, multi_label=False)
             label_weights = {
-                "danger": 1.00, "distress": 0.90, "threat": 0.85,
-                "emergency": 0.80, "violence": 0.75,
-                "normal conversation": 0.00, "calm": 0.00,
+                "danger":             1.00,
+                "distress":           0.90,
+                "threat":             0.85,
+                "emergency":          0.80,
+                "violence":           0.75,
+                "normal conversation":0.00,
+                "calm":               0.00,
+                "everyday activity":  0.00,
+                "neutral statement":  0.00,
+                "safe situation":     0.00,
             }
             intent_score = round(float(max(
                 (label_weights.get(l.lower(), 0.0) * s
@@ -641,8 +676,10 @@ def get_linguistic(path, models):
     semantic_score = 0.0
     if len(text.strip()) >= 3:
         try:
-            q_emb = models["mpnet"].encode(text, convert_to_tensor=True, show_progress_bar=False)
-            cos = util.cos_sim(q_emb, models["danger_embeddings"])[0]
+            q_emb = models["mpnet"].encode(
+                text, convert_to_tensor=True, show_progress_bar=False
+            )
+            cos            = util.cos_sim(q_emb, models["danger_embeddings"])[0]
             semantic_score = round(min(1.0, max(0.0, float(torch.max(cos)))), 4)
         except Exception as e:
             log.warning(f"mpnet: {e}")
@@ -651,71 +688,72 @@ def get_linguistic(path, models):
 
     return {
         "text": text, "language": language,
-        "intent_score": intent_score,
-        "semantic_score": semantic_score,
+        "intent_score":    intent_score,
+        "semantic_score":  semantic_score,
         "linguistic_score": linguistic_score,
     }
 
+
+# ── Full pipeline ─────────────────────────────────────────────
 def run_full_analysis(path, models):
-    """Full pipeline — returns all results dict."""
     # Acoustic
-    db = get_db_level(path)
-    twa = get_twa_dose(path)
-    noise_score = get_noise_score(path)
+    db           = get_db_level(path)
+    twa          = get_twa_dose(path)
+    noise_score  = get_noise_score(path)
     noise_status = get_noise_status(path)
 
     # Fusion
-    fused, wy, wa = _run_fusion(path, models)
-    danger_score = round(max(fused.values()), 4)
-    env_score = round(max((fused.get(c, 0) for c in DANGER_ENV), default=0.0), 4)
-    physio_score = round(max((fused.get(c, 0) for c in DANGER_PHYSIO), default=0.0), 4)
+    fused, wy, wa  = _run_fusion(path, models)
+    danger_score   = round(max(fused.values()), 4)
+    env_score      = round(max((fused.get(c, 0) for c in DANGER_ENV),   default=0.0), 4)
+    physio_score   = round(max((fused.get(c, 0) for c in DANGER_PHYSIO), default=0.0), 4)
     top_detections = sorted(fused.items(), key=lambda x: x[1], reverse=True)[:5]
 
     # Vocal
-    vocal = get_vocal_metrics(path)
+    vocal   = get_vocal_metrics(path)
 
     # Emotion
     emotion = get_emotion(path, models)
 
     # Linguistic
-    ling = get_linguistic(path, models)
+    ling    = get_linguistic(path, models)
 
     # Distress score
     emotion_score = min(1.0, sum(
         DISTRESS_WEIGHTS.get(l.lower(), 0.0) * p
         for l, p in emotion["all_emotions"].items()
     ))
-    j = vocal["jitter"] / (CLINICAL["jitter_normal_max"] * 100)
+    j = vocal["jitter"]  / (CLINICAL["jitter_normal_max"]  * 100)
     s = vocal["shimmer"] / (CLINICAL["shimmer_normal_max"] * 100)
     h = max(0, CLINICAL["hnr_normal_min"] - vocal["hnr"]) / CLINICAL["hnr_normal_min"]
     vocal_score = min(1.0, (j + s + h) / 3)
 
     rate = vocal["speaking_rate"]
-    if rate > 6.0: rate_score = min(1.0, (rate - 6.0) / 4.0)
-    elif 0 < rate < 1.0: rate_score = min(1.0, 1.0 - rate)
-    else: rate_score = 0.0
+    if   rate > 6.0:      rate_score = min(1.0, (rate - 6.0) / 4.0)
+    elif 0 < rate < 1.0:  rate_score = min(1.0, 1.0 - rate)
+    else:                 rate_score = 0.0
 
     distress_score = round(min(1.0, (
-        emotion_score * 0.35 +
-        vocal_score * 0.20 +
-        physio_score * 0.15 +
-        rate_score * 0.10 +
-        ling["linguistic_score"] * 0.20
+        emotion_score              * 0.35 +
+        vocal_score                * 0.20 +
+        physio_score               * 0.15 +
+        rate_score                 * 0.10 +
+        ling["linguistic_score"]   * 0.20
     )), 4)
 
-    if distress_score < 0.25: distress_status = "Calm"
+    if   distress_score < 0.25: distress_status = "Calm"
     elif distress_score < 0.50: distress_status = "Mild Distress"
     elif distress_score < 0.75: distress_status = "Moderate Distress"
-    else: distress_status = "Severe Distress"
+    else:                       distress_status = "Severe Distress"
 
     # Overall risk
     w = FUSION_WEIGHTS["overall"]
     overall_score = round(min(1.0, (
-        distress_score * w["distress"] +
-        noise_score * w["noise"] +
-        danger_score * w["danger"] +
-        physio_score * w["physio"] +
-        ling["linguistic_score"] * w["linguistic"]
+        distress_score             * w["distress"]   +
+        noise_score                * w["noise"]      +
+        danger_score               * w["danger"]     +
+        physio_score               * w["physio"]     +
+        ling["linguistic_score"]   * w["linguistic"]
     )), 4)
 
     physio_override = _physio_override_triggered(fused, physio_score)
@@ -724,7 +762,9 @@ def run_full_analysis(path, models):
         overall_status = "🚨 Distress"
     elif overall_score >= 0.55:
         overall_status = "🚨 Distress"
-    elif overall_score >= 0.25 or emotion["top_emotion"] in ("angry", "sad") or ling["linguistic_score"] > 0.40:
+    elif (overall_score >= 0.25
+          or emotion["top_emotion"] in ("angry", "sad")
+          or ling["linguistic_score"] > 0.40):
         overall_status = "⚠️ Stress"
     else:
         overall_status = "✅ Normal"
@@ -733,14 +773,15 @@ def run_full_analysis(path, models):
         "db": db, "twa": twa, "noise_score": noise_score, "noise_status": noise_status,
         "danger_score": danger_score, "env_score": env_score, "physio_score": physio_score,
         "top_detections": top_detections, "yamnet_weight": wy, "ast_weight": wa,
-        "vocal": vocal,
+        "vocal":   vocal,
         "emotion": emotion,
-        "ling": ling,
-        "distress_score": distress_score, "distress_status": distress_status,
-        "overall_score": overall_score, "overall_status": overall_status,
+        "ling":    ling,
+        "distress_score":  distress_score,  "distress_status":  distress_status,
+        "overall_score":   overall_score,   "overall_status":   overall_status,
     }
 
-# ── Helper: score bar HTML ────────────────────────────────────
+
+# ── Chart helpers ─────────────────────────────────────────────
 def score_bar(label, value, color="#3b82f6"):
     pct = int(value * 100)
     return f"""
@@ -751,17 +792,17 @@ def score_bar(label, value, color="#3b82f6"):
     </div>"""
 
 def score_color(v):
-    if v < 0.25: return "#4ade80"
+    if v < 0.25:  return "#4ade80"
     elif v < 0.55: return "#fb923c"
-    else: return "#f87171"
+    else:          return "#f87171"
 
-# ── Waveform chart ─────────────────────────────────────────────
-def waveform_chart(path):
+def waveform_chart(audio_bytes):
+    """Build waveform directly from bytes — no temp file needed."""
     try:
-        audio, sr = load_audio(path)
-        duration = len(audio) / sr
+        audio, sr = librosa.load(io.BytesIO(audio_bytes), sr=16000, mono=True)
+        duration  = len(audio) / sr
         t = np.linspace(0, duration, num=min(len(audio), 4000))
-        a = audio[np.linspace(0, len(audio)-1, num=len(t), dtype=int)]
+        a = audio[np.linspace(0, len(audio) - 1, num=len(t), dtype=int)]
         fig = go.Figure()
         fig.add_trace(go.Scatter(
             x=t, y=a, mode='lines',
@@ -780,10 +821,10 @@ def waveform_chart(path):
     except: return None
 
 def emotion_chart(emotion_data):
-    labels = list(emotion_data.keys())
-    values = list(emotion_data.values())
-    colors = {"angry": "#f87171", "sad": "#60a5fa", "neutral": "#94a3b8", "happy": "#4ade80"}
-    bar_colors = [colors.get(l, "#6366f1") for l in labels]
+    labels      = list(emotion_data.keys())
+    values      = list(emotion_data.values())
+    colors      = {"angry": "#f87171", "sad": "#60a5fa", "neutral": "#94a3b8", "happy": "#4ade80"}
+    bar_colors  = [colors.get(l, "#6366f1") for l in labels]
     fig = go.Figure(go.Bar(
         x=values, y=labels, orientation='h',
         marker_color=bar_colors,
@@ -800,6 +841,7 @@ def emotion_chart(emotion_data):
     )
     return fig
 
+
 # ═══════════════════════════════════════════════════════════════
 # MAIN UI
 # ═══════════════════════════════════════════════════════════════
@@ -815,13 +857,13 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# Load models
+# ── Load models (single spinner, outside cache function) ──────
 with st.spinner("Initialising models — first load takes 2–3 minutes…"):
     models = load_all_models()
 
 st.success("All 6 models ready.", icon="✅")
 
-# Upload
+# ── Upload ────────────────────────────────────────────────────
 st.markdown('<div class="card"><div class="card-title">Audio Input</div>', unsafe_allow_html=True)
 uploaded = st.file_uploader(
     "Upload an audio file",
@@ -829,10 +871,6 @@ uploaded = st.file_uploader(
     help="WAV, MP3, M4A, OGG, FLAC or WebM. Mono or stereo — converted internally to 16 kHz mono.",
     label_visibility="collapsed",
 )
-
-if uploaded:
-    st.audio(uploaded)
-
 st.markdown('</div>', unsafe_allow_html=True)
 
 if not uploaded:
@@ -845,11 +883,23 @@ if not uploaded:
     """, unsafe_allow_html=True)
     st.stop()
 
-# Run analysis
+# ── FIX: read bytes ONCE, reuse everywhere ────────────────────
+audio_bytes = uploaded.read()
+
+# Audio player
+st.audio(audio_bytes)
+
+# ── Waveform (from bytes — no second temp file) ───────────────
+fig_wave = waveform_chart(audio_bytes)
+if fig_wave:
+    st.plotly_chart(fig_wave, use_container_width=True, config={"displayModeBar": False})
+
+# ── Write single temp file for pipeline ───────────────────────
 with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-    tmp.write(uploaded.read())
+    tmp.write(audio_bytes)
     tmp_path = tmp.name
 
+# ── Run analysis ──────────────────────────────────────────────
 with st.spinner("Running full 6-model analysis pipeline…"):
     try:
         r = run_full_analysis(tmp_path, models)
@@ -860,65 +910,61 @@ with st.spinner("Running full 6-model analysis pipeline…"):
 
 os.unlink(tmp_path)
 
-# ── Waveform ──────────────────────────────────────────────────
-with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp2:
-    uploaded.seek(0)
-    tmp2.write(uploaded.read())
-    tmp2_path = tmp2.name
-
-fig_wave = waveform_chart(tmp2_path)
-os.unlink(tmp2_path)
-if fig_wave:
-    st.plotly_chart(fig_wave, use_container_width=True, config={"displayModeBar": False})
-
-# ── Overall status banner ──────────────────────────────────────
+# ── Overall status banner ─────────────────────────────────────
 status = r["overall_status"]
-if "Distress" in status: css_cls = "status-distress"
-elif "Stress" in status: css_cls = "status-stress"
-else: css_cls = "status-normal"
+if   "Distress" in status: css_cls = "status-distress"
+elif "Stress"   in status: css_cls = "status-stress"
+else:                       css_cls = "status-normal"
 
 st.markdown(f"""
 <div class="card" style="text-align:center;padding:28px">
   <div style="font-size:0.7rem;letter-spacing:0.12em;text-transform:uppercase;color:#64748b;margin-bottom:12px">Overall Assessment</div>
   <div class="{css_cls}">{status}</div>
   <div style="margin-top:16px;display:flex;justify-content:center;gap:32px">
-    <div><div style="font-size:0.7rem;color:#64748b;margin-bottom:2px">OVERALL SCORE</div>
-      <div style="font-size:1.6rem;font-weight:700;font-family:'JetBrains Mono',monospace;color:#f1f5f9">{r['overall_score']:.3f}</div></div>
-    <div><div style="font-size:0.7rem;color:#64748b;margin-bottom:2px">DISTRESS</div>
-      <div style="font-size:1.6rem;font-weight:700;font-family:'JetBrains Mono',monospace;color:#f1f5f9">{r['distress_status']}</div></div>
-    <div><div style="font-size:0.7rem;color:#64748b;margin-bottom:2px">EMOTION</div>
-      <div style="font-size:1.6rem;font-weight:700;font-family:'JetBrains Mono',monospace;color:#f1f5f9">{r['emotion']['top_emotion'].upper()}</div></div>
+    <div>
+      <div style="font-size:0.7rem;color:#64748b;margin-bottom:2px">OVERALL SCORE</div>
+      <div style="font-size:1.6rem;font-weight:700;font-family:'JetBrains Mono',monospace;color:#f1f5f9">{r['overall_score']:.3f}</div>
+    </div>
+    <div>
+      <div style="font-size:0.7rem;color:#64748b;margin-bottom:2px">DISTRESS</div>
+      <div style="font-size:1.6rem;font-weight:700;font-family:'JetBrains Mono',monospace;color:#f1f5f9">{r['distress_status']}</div>
+    </div>
+    <div>
+      <div style="font-size:0.7rem;color:#64748b;margin-bottom:2px">EMOTION</div>
+      <div style="font-size:1.6rem;font-weight:700;font-family:'JetBrains Mono',monospace;color:#f1f5f9">{r['emotion']['top_emotion'].upper()}</div>
+    </div>
   </div>
 </div>
 """, unsafe_allow_html=True)
 
-# ── dB SPL blocker warning ─────────────────────────────────────
+# ── dB SPL calibration warning ────────────────────────────────
 st.markdown("""
 <div class="blocker-box">
-  ⚠️ <strong>Pre-Deployment Note:</strong> dB SPL values require MIC sensitivity recalibration against your target hardware before deployment.
+  ⚠️ <strong>Pre-Deployment Note:</strong> dB SPL values require MIC sensitivity recalibration
+  against your target hardware before deployment.
   Set <code>sensitivity_dbfs = measured_dBFS − 94.0</code> using a 94 dB SPL 1 kHz reference tone.
 </div>
 """, unsafe_allow_html=True)
 
-# ── Score overview ─────────────────────────────────────────────
+# ── Score overview ────────────────────────────────────────────
 st.markdown('<div class="card"><div class="card-title">Score Overview</div>', unsafe_allow_html=True)
-bars_html = (
-    score_bar("Distress",    r["distress_score"],              score_color(r["distress_score"])) +
-    score_bar("Danger",      r["danger_score"],                score_color(r["danger_score"])) +
-    score_bar("Linguistic",  r["ling"]["linguistic_score"],    score_color(r["ling"]["linguistic_score"])) +
-    score_bar("Noise",       r["noise_score"],                 score_color(r["noise_score"])) +
-    score_bar("Physio",      r["physio_score"],                score_color(r["physio_score"]))
+st.markdown(
+    score_bar("Distress",   r["distress_score"],           score_color(r["distress_score"]))  +
+    score_bar("Danger",     r["danger_score"],             score_color(r["danger_score"]))    +
+    score_bar("Linguistic", r["ling"]["linguistic_score"], score_color(r["ling"]["linguistic_score"])) +
+    score_bar("Noise",      r["noise_score"],              score_color(r["noise_score"]))     +
+    score_bar("Physio",     r["physio_score"],             score_color(r["physio_score"])),
+    unsafe_allow_html=True
 )
-st.markdown(bars_html, unsafe_allow_html=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
-# ── Row 1: Acoustic + Vocal ────────────────────────────────────
+# ── Row 1: Acoustic + Vocal ───────────────────────────────────
 col1, col2 = st.columns(2)
 
 with col1:
-    st.markdown('<div class="card"><div class="card-title">📊 Acoustic Measurements</div>', unsafe_allow_html=True)
     ns_color = {"Safe": "#4ade80", "Moderate": "#fb923c", "Dangerous": "#f87171", "No Signal": "#64748b"}
     st.markdown(f"""
+    <div class="card"><div class="card-title">📊 Acoustic Measurements</div>
     <div class="metric-grid">
       <div class="metric-tile">
         <div class="metric-label">dB SPL</div>
@@ -937,11 +983,11 @@ with col1:
         <div class="metric-value">{r['noise_score']:.4f}</div>
       </div>
     </div>
+    </div>
     """, unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
 
 with col2:
-    v = r["vocal"]
+    v        = r["vocal"]
     vh_color = "#4ade80" if v["vocal_health"] == "Normal" else "#fb923c"
     st.markdown(f"""
     <div class="card"><div class="card-title">🎤 Vocal Health</div>
@@ -1014,15 +1060,16 @@ with col3:
         </div>""", unsafe_allow_html=True)
     st.markdown(f"""
     <div style="margin-top:10px;font-size:0.72rem;color:#64748b">
-      YAMNet weight: <span style="font-family:'JetBrains Mono',monospace;color:#94a3b8">{r['yamnet_weight']}</span> &nbsp;|&nbsp;
+      YAMNet weight: <span style="font-family:'JetBrains Mono',monospace;color:#94a3b8">{r['yamnet_weight']}</span>
+      &nbsp;|&nbsp;
       AST weight: <span style="font-family:'JetBrains Mono',monospace;color:#94a3b8">{r['ast_weight']}</span>
     </div>
     </div></div>""", unsafe_allow_html=True)
 
 with col4:
-    emo = r["emotion"]
+    emo       = r["emotion"]
     emo_color = {"angry": "#f87171", "sad": "#60a5fa", "neutral": "#94a3b8", "happy": "#4ade80"}
-    ec = emo_color.get(emo["top_emotion"], "#e2e8f0")
+    ec        = emo_color.get(emo["top_emotion"], "#e2e8f0")
     st.markdown(f"""
     <div class="card"><div class="card-title">😤 Speech Emotion — wav2vec2 SER</div>
     <div style="margin-bottom:16px">
@@ -1076,7 +1123,7 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# ── Feature vector (expandable) ───────────────────────────────
+# ── Feature vector (expandable) ──────────────────────────────
 with st.expander("📦 Raw Feature Vector (JSON)"):
     vector = {
         "distress_score":     r["distress_score"],
@@ -1085,15 +1132,19 @@ with st.expander("📦 Raw Feature Vector (JSON)"):
         "physio_score":       r["physio_score"],
         "emotion_score":      round(min(1.0, sum(
                                 DISTRESS_WEIGHTS.get(l, 0.0) * p
-                                for l, p in r["emotion"]["all_emotions"].items())), 4),
+                                for l, p in r["emotion"]["all_emotions"].items()
+                              )), 4),
         "vocal_health_score": round(min(1.0, (
-                                r["vocal"]["jitter"] / (CLINICAL["jitter_normal_max"] * 100) +
+                                r["vocal"]["jitter"]  / (CLINICAL["jitter_normal_max"]  * 100) +
                                 r["vocal"]["shimmer"] / (CLINICAL["shimmer_normal_max"] * 100) +
                                 max(0, CLINICAL["hnr_normal_min"] - r["vocal"]["hnr"]) / CLINICAL["hnr_normal_min"]
                               ) / 3), 4),
         "linguistic_score":   r["ling"]["linguistic_score"],
-        "audio_state":        ("Distress" if "Distress" in r["overall_status"] else
-                               "Stress"   if "Stress"   in r["overall_status"] else "Normal"),
+        "audio_state":        (
+                                "Distress" if "Distress" in r["overall_status"] else
+                                "Stress"   if "Stress"   in r["overall_status"] else
+                                "Normal"
+                              ),
         "timestamp":          datetime.now().isoformat(),
     }
     st.json(vector)
@@ -1101,44 +1152,46 @@ with st.expander("📦 Raw Feature Vector (JSON)"):
 # ── Full report (expandable) ──────────────────────────────────
 with st.expander("📋 Full Analysis Report (all 32 fields)"):
     full = {
-        "01_db_spl":          r["db"],
-        "02_twa_dose_pct":    r["twa"],
-        "03_noise_status":    r["noise_status"],
-        "04_noise_score":     r["noise_score"],
-        "05_danger_score":    r["danger_score"],
-        "06_env_score":       r["env_score"],
-        "07_physio_score":    r["physio_score"],
-        "08_env_status":      "UNSAFE" if r["danger_score"] > 0.25 else "SAFE",
-        "09_top_detections":  r["top_detections"],
-        "10_yamnet_weight":   r["yamnet_weight"],
-        "11_ast_weight":      r["ast_weight"],
-        "12_pitch_hz":        r["vocal"]["pitch_hz"],
-        "13_pitch_sd":        r["vocal"]["pitch_sd"],
-        "14_pitch_min":       r["vocal"]["pitch_min"],
-        "15_pitch_max":       r["vocal"]["pitch_max"],
-        "16_jitter_pct":      r["vocal"]["jitter"],
-        "17_shimmer_pct":     r["vocal"]["shimmer"],
-        "18_hnr_db":          r["vocal"]["hnr"],
-        "19_speaking_rate":   r["vocal"]["speaking_rate"],
-        "20_intensity_mean":  r["vocal"]["intensity"],
-        "21_vocal_health":    r["vocal"]["vocal_health"],
-        "22_transcript":      r["ling"]["text"],
-        "23_language":        r["ling"]["language"].upper(),
-        "24_intent_score":    r["ling"]["intent_score"],
-        "25_semantic_score":  r["ling"]["semantic_score"],
-        "26_linguistic_score":r["ling"]["linguistic_score"],
-        "27_top_emotion":     r["emotion"]["top_emotion"],
+        "01_db_spl":             r["db"],
+        "02_twa_dose_pct":       r["twa"],
+        "03_noise_status":       r["noise_status"],
+        "04_noise_score":        r["noise_score"],
+        "05_danger_score":       r["danger_score"],
+        "06_env_score":          r["env_score"],
+        "07_physio_score":       r["physio_score"],
+        "08_env_status":         "UNSAFE" if r["danger_score"] > 0.25 else "SAFE",
+        "09_top_detections":     r["top_detections"],
+        "10_yamnet_weight":      r["yamnet_weight"],
+        "11_ast_weight":         r["ast_weight"],
+        "12_pitch_hz":           r["vocal"]["pitch_hz"],
+        "13_pitch_sd":           r["vocal"]["pitch_sd"],
+        "14_pitch_min":          r["vocal"]["pitch_min"],
+        "15_pitch_max":          r["vocal"]["pitch_max"],
+        "16_jitter_pct":         r["vocal"]["jitter"],
+        "17_shimmer_pct":        r["vocal"]["shimmer"],
+        "18_hnr_db":             r["vocal"]["hnr"],
+        "19_speaking_rate":      r["vocal"]["speaking_rate"],
+        "20_intensity_mean":     r["vocal"]["intensity"],
+        "21_vocal_health":       r["vocal"]["vocal_health"],
+        "22_transcript":         r["ling"]["text"],
+        "23_language":           r["ling"]["language"].upper(),
+        "24_intent_score":       r["ling"]["intent_score"],
+        "25_semantic_score":     r["ling"]["semantic_score"],
+        "26_linguistic_score":   r["ling"]["linguistic_score"],
+        "27_top_emotion":        r["emotion"]["top_emotion"],
         "28_emotion_confidence": r["emotion"]["confidence"],
-        "29_distress_score":  r["distress_score"],
-        "30_distress_status": r["distress_status"],
-        "31_overall_score":   r["overall_score"],
-        "32_overall_status":  r["overall_status"],
+        "29_distress_score":     r["distress_score"],
+        "30_distress_status":    r["distress_status"],
+        "31_overall_score":      r["overall_score"],
+        "32_overall_status":     r["overall_status"],
     }
     st.json(full)
 
-# ── Footer ─────────────────────────────────────────────────────
+# ── Footer ────────────────────────────────────────────────────
 st.markdown(f"""
 <div style="text-align:center;padding:32px 0 16px;border-top:1px solid #1e3a5f;margin-top:24px">
-  <span style="font-size:0.72rem;color:#334155">WUALT Audio Analysis Engine · v3.1 · 6 Models · {datetime.now().strftime('%Y-%m-%d')}</span>
+  <span style="font-size:0.72rem;color:#334155">
+    WUALT Audio Analysis Engine · v3.1 · 6 Models · {datetime.now().strftime('%Y-%m-%d')}
+  </span>
 </div>
 """, unsafe_allow_html=True)
