@@ -340,5 +340,233 @@ if uploaded_file:
             col1, col2, col3, col4 = st.columns(4)
             with col1:
                 metric_card("Language [23]", results["language"].upper())
+           
             with col2:
-                st.markdown(f'<div class="metric-card"><div class="metric-label">Intent Score [24] (XLM-RoBERTa)</div><div class="metric-value">{results["intent_score
+                i_color = "#ef4444" if results["intent_score"] > 0.50 else ("#f59e0b" if results["intent_score"] > 0.20 else "#22c55e")
+                st.markdown(f'<div class="metric-card"><div class="metric-label">Intent Score [24] (XLM-RoBERTa)</div><div class="metric-value" style="color:{i_color}">{results["intent_score"]}</div></div>', unsafe_allow_html=True)
+                score_bar(results["intent_score"], i_color)
+            with col3:
+                st.markdown(f'<div class="metric-card"><div class="metric-label">Semantic Score [25] (MPNet cosine)</div><div class="metric-value">{results["semantic_score"]}</div></div>', unsafe_allow_html=True)
+                score_bar(results["semantic_score"], "#a78bfa")
+            with col4:
+                l_color = "#ef4444" if results["linguistic_score"] > 0.50 else ("#f59e0b" if results["linguistic_score"] > 0.30 else "#22c55e")
+                st.markdown(f'<div class="metric-card"><div class="metric-label">Linguistic Score [26]</div><div class="metric-value" style="color:{l_color}">{results["linguistic_score"]}</div></div>', unsafe_allow_html=True)
+                score_bar(results["linguistic_score"], l_color)
+
+            # ══════════════════════════════════════════════════
+            # SECTION 5 — SPEECH EMOTION
+            # ══════════════════════════════════════════════════
+            st.markdown("---")
+            st.markdown('<div class="section-header">😤 Speech Emotion — wav2vec2 SER</div>', unsafe_allow_html=True)
+
+            col1, col2 = st.columns([1, 2])
+            with col1:
+                emotion_colors = {
+                    "angry":   "#ef4444",
+                    "sad":     "#60a5fa",
+                    "happy":   "#22c55e",
+                    "neutral": "#a0a0b0",
+                }
+                top_emo   = results["emotion"]
+                top_conf  = results["emotion_confidence"]
+                emo_color = emotion_colors.get(top_emo, "#a78bfa")
+                st.markdown(f"""
+                <div style="text-align:center; padding:30px 20px; background:#1e1e2e;
+                            border-radius:12px; border: 2px solid {emo_color};">
+                    <div style="font-size:3rem;">
+                        {"😡" if top_emo=="angry" else "😢" if top_emo=="sad" else "😊" if top_emo=="happy" else "😐"}
+                    </div>
+                    <div style="font-size:1.6rem; font-weight:800; color:{emo_color}; margin-top:8px;">
+                        {top_emo.upper()}
+                    </div>
+                    <div style="font-size:1rem; color:#a0a0b0; margin-top:4px;">
+                        [27] Confidence: {top_conf*100:.1f}%
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            with col2:
+                st.markdown("**[28] Emotion Breakdown**")
+                for emo, prob in results["emotion_breakdown"].items():
+                    bar_color = emotion_colors.get(emo, "#a78bfa")
+                    pct = int(prob * 100)
+                    st.markdown(f"""
+                    <div style="margin: 6px 0;">
+                        <div style="display:flex; justify-content:space-between; margin-bottom:3px;">
+                            <span style="color:#e2e8f0; font-size:0.9rem; text-transform:capitalize;">{emo}</span>
+                            <span style="color:{bar_color}; font-weight:700; font-size:0.9rem;">{prob:.4f}</span>
+                        </div>
+                        <div style="background:#2d2d3d; border-radius:4px; height:10px;">
+                            <div style="width:{pct}%; background:{bar_color}; height:10px; border-radius:4px;"></div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            # ══════════════════════════════════════════════════
+            # SECTION 6 — DISTRESS ANALYSIS
+            # ══════════════════════════════════════════════════
+            st.markdown("---")
+            st.markdown('<div class="section-header">😰 Distress Analysis — 6-Model Fusion</div>', unsafe_allow_html=True)
+
+            col1, col2 = st.columns(2)
+            with col1:
+                ds = results["distress_score"]
+                ds_color = "#ef4444" if ds >= 0.75 else ("#f59e0b" if ds >= 0.50 else ("#fbbf24" if ds >= 0.25 else "#22c55e"))
+                st.markdown(f'<div class="metric-card"><div class="metric-label">Distress Score [29]</div><div class="metric-value" style="color:{ds_color}">{ds}</div></div>', unsafe_allow_html=True)
+                score_bar(ds, ds_color)
+            with col2:
+                dst_color = status_color(results["distress_status"])
+                st.markdown(f'<div class="metric-card"><div class="metric-label">Distress Status [30]</div><div class="metric-value" style="color:{dst_color}">{results["distress_status"]}</div></div>', unsafe_allow_html=True)
+
+            # ══════════════════════════════════════════════════
+            # SECTION 7 — OVERALL RISK
+            # ══════════════════════════════════════════════════
+            st.markdown("---")
+            st.markdown('<div class="section-header">🔰 Overall Risk Assessment</div>', unsafe_allow_html=True)
+
+            col1, col2 = st.columns(2)
+            with col1:
+                ors = results["overall_risk_score"]
+                ors_color = "#ef4444" if ors >= 0.55 else ("#f59e0b" if ors >= 0.25 else "#22c55e")
+                st.markdown(f'<div class="metric-card"><div class="metric-label">Overall Risk Score [31]</div><div class="metric-value" style="color:{ors_color}">{ors}</div></div>', unsafe_allow_html=True)
+                score_bar(ors, ors_color)
+            with col2:
+                render_status_banner(results["overall_risk_status"])
+
+            # ══════════════════════════════════════════════════
+            # SECTION 8 — SUMMARY TABLE
+            # ══════════════════════════════════════════════════
+            st.markdown("---")
+            st.markdown('<div class="section-header">📋 Summary</div>', unsafe_allow_html=True)
+
+            summary_data = {
+                "Field":  [
+                    "State", "Distress", "Emotion",
+                    "Vocal Health", "Transcript", "Language",
+                    "Overall Score", "Distress Score",
+                    "Danger Score", "Linguistic Score",
+                ],
+                "Value": [
+                    results["overall_risk_status"],
+                    results["distress_status"],
+                    f"{results['emotion'].upper()} ({results['emotion_confidence']*100:.1f}%)",
+                    results["vocal_health"],
+                    f'"{results["transcript"]}"',
+                    results["language"].upper(),
+                    str(results["overall_risk_score"]),
+                    str(results["distress_score"]),
+                    str(results["danger_score"]),
+                    str(results["linguistic_score"]),
+                ],
+            }
+            st.table(summary_data)
+
+            # ══════════════════════════════════════════════════
+            # SECTION 9 — ASSERTION CHECK (mirrors Cell 18)
+            # ══════════════════════════════════════════════════
+            st.markdown("---")
+            st.markdown('<div class="section-header">🧪 Assertion Check (mirrors Cell 18)</div>', unsafe_allow_html=True)
+
+            INTENT_MAX_NEUTRAL = 0.20
+            LING_MAX_NEUTRAL   = 0.30
+            EXPECTED_STATUSES  = ["✅ Normal", "⚠️ Stress"]
+
+            intent_pass = results["intent_score"]   < INTENT_MAX_NEUTRAL
+            ling_pass   = results["linguistic_score"] < LING_MAX_NEUTRAL
+            status_pass = results["overall_risk_status"] in EXPECTED_STATUSES
+            all_pass    = intent_pass and ling_pass and status_pass
+
+            a1, a2, a3 = st.columns(3)
+            with a1:
+                st.markdown(f"""
+                <div style="padding:14px; background:{'#0a2d1a' if intent_pass else '#3b0a0a'};
+                            border-radius:10px; border-left:4px solid {'#22c55e' if intent_pass else '#ef4444'};">
+                    <div style="font-size:0.75rem; color:#a0a0b0;">Intent Score (must be &lt; {INTENT_MAX_NEUTRAL})</div>
+                    <div style="font-size:1.2rem; font-weight:700; color:{'#22c55e' if intent_pass else '#ef4444'};">
+                        {results['intent_score']:.4f} {'✅ PASS' if intent_pass else '❌ FAIL'}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            with a2:
+                st.markdown(f"""
+                <div style="padding:14px; background:{'#0a2d1a' if ling_pass else '#3b0a0a'};
+                            border-radius:10px; border-left:4px solid {'#22c55e' if ling_pass else '#ef4444'};">
+                    <div style="font-size:0.75rem; color:#a0a0b0;">Linguistic Score (must be &lt; {LING_MAX_NEUTRAL})</div>
+                    <div style="font-size:1.2rem; font-weight:700; color:{'#22c55e' if ling_pass else '#ef4444'};">
+                        {results['linguistic_score']:.4f} {'✅ PASS' if ling_pass else '❌ FAIL'}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            with a3:
+                st.markdown(f"""
+                <div style="padding:14px; background:{'#0a2d1a' if status_pass else '#3b0a0a'};
+                            border-radius:10px; border-left:4px solid {'#22c55e' if status_pass else '#ef4444'};">
+                    <div style="font-size:0.75rem; color:#a0a0b0;">Overall Status (must not be Distress)</div>
+                    <div style="font-size:1.2rem; font-weight:700; color:{'#22c55e' if status_pass else '#ef4444'};">
+                        {results['overall_risk_status']} {'✅ PASS' if status_pass else '❌ FAIL'}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            st.markdown("<br>", unsafe_allow_html=True)
+            if all_pass:
+                st.success("🎉 ALL ASSERTIONS PASSED")
+            else:
+                st.error("🔴 ASSERTIONS FAILED — review intent fix")
+
+            # ══════════════════════════════════════════════════
+            # SECTION 10 — JSON EXPORT
+            # ══════════════════════════════════════════════════
+            st.markdown("---")
+            st.markdown('<div class="section-header">💾 Export Results</div>', unsafe_allow_html=True)
+
+            # Prepare JSON-safe results (top_detections is list of tuples)
+            export = {k: v for k, v in results.items() if k != "top_detections"}
+            export["top_detections"] = [
+                {"class": cls, "score": sc} for cls, sc in results["top_detections"]
+            ]
+            export["analyzed_file"] = uploaded_file.name
+            export["analyzed_at"]   = datetime.now().isoformat()
+
+            col_dl1, col_dl2 = st.columns(2)
+            with col_dl1:
+                import json
+                st.download_button(
+                    label="⬇️ Download JSON Report",
+                    data=json.dumps(export, indent=2),
+                    file_name=f"audio_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                    mime="application/json",
+                    use_container_width=True,
+                )
+            with col_dl2:
+                import csv as csv_module
+                import io as io_module
+                flat_rows = [(k, str(v)) for k, v in export.items() if k != "top_detections"]
+                flat_rows += [(f"top_detection_{i+1}", f"{d['class']} ({d['score']})") for i, d in enumerate(export["top_detections"])]
+                csv_buf = io_module.StringIO()
+                writer  = csv_module.writer(csv_buf)
+                writer.writerow(["field", "value"])
+                writer.writerows(flat_rows)
+                st.download_button(
+                    label="⬇️ Download CSV Report",
+                    data=csv_buf.getvalue(),
+                    file_name=f"audio_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
+
+        finally:
+            # Always clean up temp file
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+else:
+    # ── Empty state ───────────────────────────────────────────
+    st.markdown("""
+    <div style="text-align:center; padding:60px 20px; color:#6b7280;">
+        <div style="font-size:4rem;">🎙️</div>
+        <div style="font-size:1.3rem; margin-top:12px;">Upload an audio file to begin analysis</div>
+        <div style="font-size:0.9rem; margin-top:8px;">Supports WAV · MP3 · FLAC · OGG · M4A</div>
+    </div>
+    """, unsafe_allow_html=True)
+
